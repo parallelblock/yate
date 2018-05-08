@@ -12,6 +12,7 @@ import (
 type RenderContext interface {
 	Resolve(base, relative string) (string, error)
 	Render(componentName string, args ...interface{}) (err error)
+	Import(componentName string, args ...interface{}) (err error)
 	Writer() io.Writer
 	Vars() interface{}
 }
@@ -38,6 +39,10 @@ func NewComponent(filepath string) *Component {
 			}
 
 			err = c.ctx.Render(componentPath, fargs...)
+			return "", err
+		},
+		"import": func(resource string, fargs ...interface{}) (interface{}, error) {
+			err := c.ctx.Import(resource, fargs...)
 			return "", err
 		},
 	}
@@ -74,21 +79,27 @@ type ComponentResolver interface {
 	Resolve(path string) (*Component, error)
 }
 
-type RenderScope struct {
-	W           io.Writer
-	Resolver    ComponentResolver
-	BasePath    string
-	Variables   interface{}
-	RenderStack []*Component
+type ImportRenderer interface {
+	Import(path string, args ...interface{}) error
 }
 
-func NewRenderScope(w io.Writer, r ComponentResolver, basePath string, vars interface{}) *RenderScope {
+type RenderScope struct {
+	W                 io.Writer
+	ComponentResolver ComponentResolver
+	ResourceResolver  ImportRenderer
+	BasePath          string
+	Variables         interface{}
+	RenderStack       []*Component
+}
+
+func NewRenderScope(w io.Writer, c ComponentResolver, r ImportRenderer, basePath string, vars interface{}) *RenderScope {
 	return &RenderScope{
-		W:           w,
-		Resolver:    r,
-		BasePath:    basePath,
-		Variables:   vars,
-		RenderStack: make([]*Component, 0),
+		W:                 w,
+		ComponentResolver: c,
+		ResourceResolver:  r,
+		BasePath:          basePath,
+		Variables:         vars,
+		RenderStack:       make([]*Component, 0),
 	}
 }
 
@@ -99,7 +110,7 @@ func (c *RenderScope) Resolve(base, relative string) (string, error) {
 }
 
 func (c *RenderScope) Render(componentName string, args ...interface{}) (err error) {
-	comp, err := c.Resolver.Resolve(componentName)
+	comp, err := c.ComponentResolver.Resolve(componentName)
 	if err != nil {
 		return err
 	}
@@ -121,6 +132,10 @@ func (c *RenderScope) Render(componentName string, args ...interface{}) (err err
 	c.RenderStack = append(c.RenderStack, comp)
 
 	return comp.Render(c, args...)
+}
+
+func (c *RenderScope) Import(resource string, args ...interface{}) (err error) {
+	return c.ResourceResolver.Import(resource, args...)
 }
 
 func (c *RenderScope) Vars() interface{} {

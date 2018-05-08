@@ -9,17 +9,27 @@ import (
 	"testing"
 )
 
-type rfunc func(args []interface{}) error
+type rfunc func(args ...interface{}) error
 
 type testRCtx struct {
 	b            *bytes.Buffer
 	subrender    map[string]rfunc
+	subimport    map[string]rfunc
 	vars         interface{}
 	resolveFails bool
 }
 
 var notExist = errors.New("does not exist")
 var resolveFail = errors.New("resolve failure")
+
+func (c *testRCtx) Import(resourceName string, args ...interface{}) error {
+	f, h := c.subimport[resourceName]
+	if !h {
+		return notExist
+	}
+
+	return f(args...)
+}
 
 func (c *testRCtx) Resolve(base, relative string) (string, error) {
 	if c.resolveFails {
@@ -33,7 +43,7 @@ func (c *testRCtx) Render(componentName string, args ...interface{}) error {
 	if !h {
 		return notExist
 	}
-	return f(args)
+	return f(args...)
 }
 
 func (c *testRCtx) Writer() io.Writer {
@@ -50,13 +60,16 @@ var componentTests = []struct {
 	result       string
 	resultError  error
 }{
-	{"hello world", false, "hello world", nil},                           // simple
-	{"{{ .Vars.test }}", false, "hello!", nil},                           // var replacement
-	{"{{ .Arg0 }}, {{ .Arg1 }}", false, "the 0th arg, the 1st arg", nil}, // arg replacement
-	{"{{ include \"something\" }}", false, "something?", nil},            // inclusion of render
-	{"{{ include \"subargs\" 123 }}", false, "subargs test", nil},        // inclusion with specific arguments
-	{"{{ include \"nothing\" }}", true, "", resolveFail},                 // resolution failure
-	{"{{ include \"nonexistant\" }}", false, "", notExist},               // rendering failure
+	{"hello world", false, "hello world", nil},                            // simple
+	{"{{ .Vars.test }}", false, "hello!", nil},                            // var replacement
+	{"{{ .Arg0 }}, {{ .Arg1 }}", false, "the 0th arg, the 1st arg", nil},  // arg replacement
+	{"{{ include \"something\" }}", false, "something?", nil},             // inclusion of render
+	{"{{ include \"subargs\" 123 }}", false, "subargs test", nil},         // inclusion with specific arguments
+	{"{{ include \"nothing\" }}", true, "", resolveFail},                  // resolution failure
+	{"{{ include \"nonexistant\" }}", false, "", notExist},                // rendering failure
+	{"{{ import \"theimport\" }}", false, "renderedResult", nil},          // import of seperate render
+	{"{{ import \"theimportargs\" 132 }}", false, "someotherresult", nil}, // import of seperate render
+	{"{{ import \"badimport\" }}", false, "", notExist},                   // import failure
 }
 
 func TestComponent(t *testing.T) {
@@ -66,11 +79,11 @@ func TestComponent(t *testing.T) {
 			rctx = &testRCtx{
 				b: new(bytes.Buffer),
 				subrender: map[string]rfunc{
-					"something": func(_ []interface{}) error {
+					"something": func(_ ...interface{}) error {
 						_, e := rctx.b.WriteString("something?")
 						return e
 					},
-					"subargs": func(args []interface{}) error {
+					"subargs": func(args ...interface{}) error {
 						if len(args) != 1 {
 							t.Fatalf("incorrect arg length - expected: %d, got: %d", 1, len(args))
 						}
@@ -78,6 +91,22 @@ func TestComponent(t *testing.T) {
 							t.Fatalf("incorrect arg contents - expected: %v, got %v", 123, args[0])
 						}
 						_, e := rctx.b.WriteString("subargs test")
+						return e
+					},
+				},
+				subimport: map[string]rfunc{
+					"theimport": func(_ ...interface{}) error {
+						_, e := rctx.b.WriteString("renderedResult")
+						return e
+					},
+					"theimportargs": func(args ...interface{}) error {
+						if len(args) != 1 {
+							t.Fatalf("incorrect arg length - expected: %d, got: %d", 1, len(args))
+						}
+						if args[0] != 132 {
+							t.Fatalf("incorrect arg contents - expected: %v, got %v", 132, args[0])
+						}
+						_, e := rctx.b.WriteString("someotherresult")
 						return e
 					},
 				},
@@ -149,23 +178,51 @@ func (s staticResolver) Resolve(path string) (*Component, error) {
 	return c, nil
 }
 
+func (s staticResolver) Import(path string, args ...interface{}) error {
+	return nil
+}
+
+type specialImporter struct {
+	io.Writer
+}
+
+func (s *specialImporter) Import(path string, args ...interface{}) error {
+	if path == "c" {
+		_, e := s.Write([]byte("result"))
+		return e
+	}
+	return notExist
+}
+
 var renderScopeRenderTests = []struct {
-	resolver      staticResolver
+	resolver      ComponentResolver
+	resources     ImportRenderer
 	componentName string
 	args          []interface{}
 	expected      string
 }{
-	{staticResolver{"a": "test"}, "a", []interface{}{}, "test"},                                                     // basic functionality
-	{staticResolver{"a": "{{ .Arg0 }}, {{ .Arg1 }}"}, "a", []interface{}{"1st arg", "2nd arg"}, "1st arg, 2nd arg"}, // args passthrough
-	{staticResolver{"a": "{{ include \"b\" }}", "b": "test"}, "a", []interface{}{}, "test"},                         // include stack
-	{staticResolver{"a": "{{ .Vars.v }}"}, "a", []interface{}{}, "result"},                                          // vars passthrough
+	{staticResolver{"a": "test"}, staticResolver{}, "a", []interface{}{}, "test"},                                                     // basic functionality
+	{staticResolver{"a": "{{ .Arg0 }}, {{ .Arg1 }}"}, staticResolver{}, "a", []interface{}{"1st arg", "2nd arg"}, "1st arg, 2nd arg"}, // args passthrough
+	{staticResolver{"a": "{{ include \"b\" }}", "b": "test"}, staticResolver{}, "a", []interface{}{}, "test"},                         // include stack
+	{staticResolver{"a": "{{ .Vars.v }}"}, staticResolver{}, "a", []interface{}{}, "result"},                                          // vars passthrough
+	{staticResolver{"a": "{{ import \"c\" }}"}, &specialImporter{}, "a", []interface{}{}, "result"},                                   // vars passthrough
 }
 
 func TestRenderScopeRender(t *testing.T) {
 	for i, tt := range renderScopeRenderTests {
 		t.Run(strconv.Itoa(i+1), func(t *testing.T) {
 			b := new(bytes.Buffer)
-			scope := NewRenderScope(b, tt.resolver, "", map[string]string{"v": "result"})
+
+			si, is := tt.resources.(*specialImporter)
+			if is {
+				si.Writer = b
+			}
+
+			scope := NewRenderScope(b,
+				tt.resolver,
+				tt.resources,
+				"",
+				map[string]string{"v": "result"})
 
 			t.Log(tt.args)
 
@@ -198,7 +255,7 @@ func TestRenderScopeRenderRecursiveErrors(t *testing.T) {
 	r["b"] = bc
 
 	b := new(bytes.Buffer)
-	scope := NewRenderScope(b, r, "", struct{}{})
+	scope := NewRenderScope(b, r, staticResolver{}, "", struct{}{})
 	e := scope.Render("a")
 	if e == nil {
 		t.Fatalf("expected an error, got nil")
@@ -217,12 +274,26 @@ func (s faultyResolver) Resolve(path string) (*Component, error) {
 	return nil, notExist
 }
 
+func (s faultyResolver) Import(path string, args ...interface{}) error {
+	return notExist
+}
+
 func TestRenderScopeRenderFaultyResolverErrors(t *testing.T) {
 	r := faultyResolver{}
 	b := new(bytes.Buffer)
-	scope := NewRenderScope(b, r, "", struct{}{})
+	scope := NewRenderScope(b, r, staticResolver{}, "", struct{}{})
 	e := scope.Render("a")
 	if e != notExist {
+		t.Fatalf("error was not correct - expected %v, got %v", notExist, e)
+	}
+}
+
+func TestRenderScopeImportFaulty(t *testing.T) {
+	r := faultyResolver{}
+	b := new(bytes.Buffer)
+	scope := NewRenderScope(b, staticResolver{"a": "{{ import \"b\" }}"}, r, "", struct{}{})
+	e := scope.Render("a")
+	if strings.HasSuffix(notExist.Error(), e.Error()) {
 		t.Fatalf("error was not correct - expected %v, got %v", notExist, e)
 	}
 }
