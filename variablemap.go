@@ -32,11 +32,13 @@ func mergeReflectingMaps(to, from reflect.Value) {
 			continue
 		}
 
-		if toVal.Type().Kind() == reflect.Map {
+		toValReeval := reflect.ValueOf(toVal.Interface())
+		if toValReeval.Type().Kind() == reflect.Map {
 			fromVal := from.MapIndex(k)
-			if fromVal.Type().Kind() == reflect.Map {
+			fromValReeval := reflect.ValueOf(fromVal.Interface())
+			if fromValReeval.Type().Kind() == reflect.Map {
 				// we must go deeper!
-				mergeReflectingMaps(toVal, fromVal)
+				mergeReflectingMaps(toValReeval, fromValReeval)
 			}
 		}
 	}

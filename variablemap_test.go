@@ -14,11 +14,13 @@ var variableMapMergeTests = []struct {
 	{VariableMap{"a": map[string]string{"a": "value1"}}, VariableMap{"a": map[string]string{"b": "value2"}}, VariableMap{"a": map[string]string{"a": "value1", "b": "value2"}}},
 	{VariableMap{"a": "value1"}, VariableMap{"a": map[string]string{"b": "value2"}}, VariableMap{"a": "value1"}},
 	{VariableMap{"a": map[string]string{"a": "value1"}}, VariableMap{"a": map[string]string{"a": "value2"}}, VariableMap{"a": map[string]string{"a": "value1"}}},
+	{VariableMap{"a": map[string]interface{}{"a": map[string]string{"a": "value1"}}}, VariableMap{"a": map[string]string{"a": "value2"}}, VariableMap{"a": map[string]interface{}{"a": map[string]string{"a": "value1"}}}},
+	{VariableMap{"a": map[string]interface{}{"a": map[string]string{"a": "value1"}}}, VariableMap{"a": map[string]interface{}{"a": map[string]string{"b": "value2"}}}, VariableMap{"a": map[string]interface{}{"a": map[string]string{"a": "value1", "b": "value2"}}}},
 }
 
 func TestVariableMapMerge(t *testing.T) {
 	for i, tt := range variableMapMergeTests {
-		t.Run(strconv.Itoa(i), func(t *testing.T) {
+		t.Run(strconv.Itoa(i+1), func(t *testing.T) {
 			result := tt.object.MergeFrom(tt.argument)
 			if !reflect.DeepEqual(result, tt.result) {
 				t.Errorf("unequal results - expected %v, got %v", tt.result, result)
