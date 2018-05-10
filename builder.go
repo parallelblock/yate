@@ -1,5 +1,9 @@
 package main
 
+import (
+	"reflect"
+)
+
 type ResourceConfig struct {
 	Template  string
 	Output    string
@@ -28,9 +32,12 @@ func (r *ResourceConfig) Is(r2 *ResourceConfig) bool {
 		return false
 	} else if r.Output != r2.Output {
 		return false
-	} else if !stringArrayIs(r, r2) {
+	} else if !stringArrayIs(r.Inherits, r2.Inherits) {
+		return false
+	} else if !reflect.DeepEqual(r.Variables, r2.Variables) {
 		return false
 	}
+	return true
 }
 
 type ResourceConfigSource interface {
